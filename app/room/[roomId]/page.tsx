@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from "react";
 import { supabase } from "../../lib/supabase";
+import { QRCodeCanvas } from "qrcode.react"; // ← ファイルの上のほうに追加
 
 // 1. 型の定義（ビルドエラーを防ぐために重要）
 type PageProps = {
@@ -77,15 +78,29 @@ export default function RoomPage(props: PageProps) {
       </header>
 
       {isAdmin && (
-        <div className="bg-black text-white p-4 rounded-xl space-y-3 shadow-lg">
-          <p className="font-bold border-b border-gray-700 pb-1 text-orange-400">🔧 運営パネル</p>
-          <div className="flex gap-2 flex-wrap text-xs">
-            <button onClick={() => updateStatus("waiting")} className={`px-3 py-2 rounded font-bold transition ${roomStatus==='waiting'?'bg-orange-600':'bg-gray-700 hover:bg-gray-600'}`}>1.回答受付中</button>
-            <button onClick={() => updateStatus("reveal")} className={`px-3 py-2 rounded font-bold transition ${roomStatus==='reveal'?'bg-orange-600':'bg-gray-700 hover:bg-gray-600'}`}>2.回答を一覧表示（匿名）</button>
-            <button onClick={() => updateStatus("result")} className={`px-3 py-2 rounded font-bold transition ${roomStatus==='result'?'bg-orange-600':'bg-gray-700 hover:bg-gray-600'}`}>3.正解発表（名前公開）</button>
-          </div>
-        </div>
-      )}
+  <div className="bg-black text-white p-6 rounded-xl space-y-4 shadow-2xl">
+    <div className="flex justify-between items-start">
+      <div>
+        <p className="font-bold border-b border-gray-700 pb-1 text-orange-400">🔧 運営パネル</p>
+        <p className="text-2xl font-mono mt-2">Room ID: {roomId}</p>
+      </div>
+      
+      {/* QRコードを表示！ */}
+      <div className="bg-white p-2 rounded-lg">
+        <QRCodeCanvas 
+          value={`${window.location.origin}/room/${roomId}`} 
+          size={100}
+        />
+      </div>
+    </div>
+
+    <div className="flex gap-2 flex-wrap text-xs">
+       {/* ...ここには前のボタンたち（updateStatusなど）が入ります... */}
+    </div>
+    
+    <p className="text-[10px] text-gray-500 text-center italic">このQRコードを参加者のスマホで読み取ってもらってください</p>
+  </div>
+)}
 
       {roomStatus === "waiting" && (
         <div className="bg-white p-6 rounded-2xl shadow-md border-t-4 border-orange-500">
