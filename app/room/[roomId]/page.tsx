@@ -2,130 +2,123 @@
 
 import { useState, useEffect, use } from "react";
 import { supabase } from "../../lib/supabase";
+import { useSearchParams } from "next/navigation";
+
 export default function RoomPage({ params }: { params: Promise<{ roomId: string }> }) {
   const resolvedParams = use(params);
   const roomId = resolvedParams.roomId;
+  
+  // URLの「?admin=true」を読み取る
+  const searchParams = useSearchParams();
+  const isAdmin = searchParams.get("admin") === "true";
 
   const [name, setName] = useState("");
   const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(false);
-  
-  // 回答を保存するリスト
   const [answers, setAnswers] = useState<any[]>([]);
-  const [isShuffled, setIsShuffled] = useState(false);
+  const [roomStatus, setRoomStatus] = useState("waiting"); // waiting, reveal, result
 
-  // --- 1. 最初にデータを読み込み ＆ リアルタイム監視 ---
   useEffect(() => {
-    // 既存の回答を取得
-    const fetchAnswers = async () => {
-      const { data } = await supabase
-        .from("answers")
-        .select("*")
-        .eq("room_id", roomId);
-      if (data) setAnswers(data);
+    // 1. 初回のデータ取得（部屋の状態と回答一覧）
+    const fetchData = async () => {
+      // 部屋の状態を取得
+      const { data: roomData } = await supabase.from("rooms").select("*").eq("id", roomId).single();
+      if (roomData) setRoomStatus(roomData.status);
+      else if (isAdmin) {
+        // 管理者が初めて入った時、部屋データがなければ作成する
+        await supabase.from("rooms").insert([{ id: roomId, status: "waiting" }]);
+      }
+
+      // 回答を取得
+      const { data: ansData } = await supabase.from("answers").select("*").eq("room_id", roomId);
+      if (ansData) setAnswers(ansData);
     };
 
-    fetchAnswers();
+    fetchData();
 
-    // 誰かが投稿した瞬間にリストを更新する（リアルタイム機能）
-    const channel = supabase
-      .channel("realtime-answers")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "answers", filter: `room_id=eq.${roomId}` },
-        (payload) => {
-          setAnswers((current) => [...current, payload.new]);
-        }
+    // 2. リアルタイム更新（回答の追加と、部屋の状態変更を監視）
+    const roomChannel = supabase.channel(`room-${roomId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rooms", filter: `id=eq.${roomId}` }, 
+        (payload) => setRoomStatus(payload.new.status)
+      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "answers", filter: `room_id=eq.${roomId}` }, 
+        (payload) => setAnswers((prev) => [...prev, payload.new])
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [roomId]);
+    return () => { supabase.removeChannel(roomChannel); };
+  }, [roomId, isAdmin]);
 
-  // --- 2. 送信処理 ---
+  // 回答送信
   const submitAnswer = async () => {
-    if (!name || !answer) return alert("名前と回答を入れてね！");
+    if (!name || !answer) return alert("名前と回答を入力してね");
     setLoading(true);
-    const { error } = await supabase.from("answers").insert([
-      { room_id: roomId, author_name: name, content: answer },
-    ]);
+    await supabase.from("answers").insert([{ room_id: roomId, author_name: name, content: answer }]);
     setLoading(false);
-    if (error) alert(error.message);
-    else {
-      setAnswer("");
-      alert("送信完了！");
-    }
+    alert("送信完了！");
+    setAnswer("");
   };
 
-  // --- 3. シャッフル処理（匿名にする） ---
-  const handleShuffle = () => {
-    // Fisher-Yates アルゴリズムでバラバラにする
-    const shuffled = [...answers].sort(() => Math.random() - 0.5);
-    setAnswers(shuffled);
-    setIsShuffled(true);
+  // 【管理者用】部屋の状態を更新する関数
+  const updateStatus = async (status: string) => {
+    await supabase.from("rooms").update({ status }).eq("id", roomId);
+  };
+
+  // シャッフル（表示用）
+  const shuffleAnswers = () => {
+    setAnswers([...answers].sort(() => Math.random() - 0.5));
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-8 bg-orange-50 min-h-screen">
-      <h1 className="text-4xl font-serif font-bold text-center text-gray-800">文芸たほいや</h1>
+    <div className="max-w-2xl mx-auto p-6 space-y-8 bg-slate-50 min-h-screen font-serif">
+      <header className="text-center">
+        <h1 className="text-4xl font-bold text-gray-900 mb-2">文芸たほいや</h1>
+        <p className="text-sm text-gray-500 italic">Room ID: {roomId} {isAdmin && "(管理者モード)"}</p>
+      </header>
 
-      {/* 投稿フォーム */}
-      <div className="bg-white p-6 rounded-2xl shadow-md border border-orange-200">
-        <h2 className="text-lg font-bold mb-4">✍️ 回答を投稿する</h2>
-        <div className="space-y-4">
-          <input
-            type="text"
-            className="w-full border-2 p-3 rounded-xl outline-none focus:border-orange-400 transition"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="あなたの名前"
-          />
-          <textarea
-            className="w-full border-2 p-3 rounded-xl h-24 outline-none focus:border-orange-400 transition"
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            placeholder="本物っぽい書き出しを考えてください..."
-          />
-          <button
-            onClick={submitAnswer}
-            disabled={loading}
-            className="w-full bg-orange-600 text-white p-3 rounded-xl font-bold hover:bg-orange-700 disabled:bg-gray-300 transition"
-          >
-            {loading ? "送信中..." : "回答を送信！"}
-          </button>
+      {/* 管理者用コントローラー */}
+      {isAdmin && (
+        <div className="bg-black text-white p-4 rounded-xl space-y-3">
+          <p className="font-bold border-b border-gray-700 pb-1">🔧 運営パネル</p>
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => updateStatus("waiting")} className={`px-3 py-1 rounded ${roomStatus==='waiting'?'bg-blue-600':'bg-gray-700'}`}>1.回答受付中</button>
+            <button onClick={() => { updateStatus("reveal"); shuffleAnswers(); }} className={`px-3 py-1 rounded ${roomStatus==='reveal'?'bg-blue-600':'bg-gray-700'}`}>2.回答を一覧表示（匿名）</button>
+            <button onClick={() => updateStatus("result")} className={`px-3 py-1 rounded ${roomStatus==='result'?'bg-blue-600':'bg-gray-700'}`}>3.正解発表（名前公開）</button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* 回答一覧表示 */}
-      <div className="space-y-4">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-bold text-gray-700">📚 届いた回答 ({answers.length}件)</h2>
-          <button
-            onClick={handleShuffle}
-            className="bg-black text-white px-4 py-2 rounded-full text-sm font-bold hover:bg-gray-800 transition"
-          >
-            ランダムに並べ替える
-          </button>
+      {/* 1. 回答入力フェーズ */}
+      {roomStatus === "waiting" && (
+        <div className="bg-white p-6 rounded-2xl shadow-lg border-t-4 border-blue-500">
+          <h2 className="text-xl font-bold mb-4">✍️ あなたの回答を投稿</h2>
+          <div className="space-y-4">
+            <input type="text" placeholder="あなたの名前" className="w-full border p-3 rounded-lg" value={name} onChange={(e)=>setName(e.target.value)} />
+            <textarea placeholder="小説の書き出しを考えて..." className="w-full border p-3 rounded-lg h-32" value={answer} onChange={(e)=>setAnswer(e.target.value)} />
+            <button onClick={submitAnswer} disabled={loading} className="w-full bg-blue-600 text-white p-3 rounded-lg font-bold">
+              {loading ? "送信中..." : "回答を送信する"}
+            </button>
+          </div>
         </div>
+      )}
 
-        <div className="grid gap-4">
-          {answers.map((item, index) => (
-            <div key={item.id} className="bg-white p-5 rounded-xl shadow-sm border-l-8 border-orange-400">
-              <p className="text-lg leading-relaxed text-gray-800">
-                {item.content}
-              </p>
-              {/* シャッフル前は名前を出す、シャッフル後は名前を隠す（匿名性） */}
-              {!isShuffled && (
-                <p className="text-sm text-gray-400 mt-2 text-right">— {item.author_name}</p>
-              )}
-            </div>
-          ))}
+      {/* 2. 一覧表示フェーズ（匿名 or 名前あり） */}
+      {(roomStatus === "reveal" || roomStatus === "result") && (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-center">ーー 届いた回答 ーー</h2>
+          <div className="grid gap-4">
+            {answers.map((item, index) => (
+              <div key={index} className="bg-white p-6 rounded-lg shadow border-l-4 border-gray-800">
+                <p className="text-lg leading-relaxed">{item.content}</p>
+                {roomStatus === "result" && (
+                  <p className="text-right text-blue-600 font-bold mt-2">ー {item.author_name}</p>
+                )}
+              </div>
+            ))}
+          </div>
+          {answers.length === 0 && <p className="text-center text-gray-400">まだ回答がありません</p>}
         </div>
-      </div>
-
-      <p className="text-center text-gray-400 text-xs mt-10">Room ID: {roomId}</p>
+      )}
     </div>
   );
 }
